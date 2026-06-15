@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>無限進化！限界突破の槍避けゲーム</title>
+    <style>
+        body {
+            background-color: #111;
+            color: #fff;
+            font-family: sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 10px;
+        }
+        #gameContainer {
+            margin: 10px auto;
+            position: relative;
+            display: inline-block;
+        }
+        #gameCanvas {
+            background-color: #222;
+            border: 4px solid #ff4757;
+            display: block;
+            box-shadow: 0 0 35px rgba(255, 71, 87, 0.5);
+            transition: width 0.5s, height 0.5s;
+        }
+        .instructions {
+            font-size: 14px;
+            color: #ccc;
+            max-width: 600px;
+            margin: 10px auto;
+            line-height: 1.5;
+        }
+        #restartBtn {
+            padding: 12px 24px;
+            font-size: 18px;
+            background-color: #ff4757;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+            display: none;
+            margin: 10px auto;
+            font-weight: bold;
+        }
+        #restartBtn:hover {
+            background-color: #ff6b81;
+        }
+        .info-panel {
+            font-size: 20px;
+            margin: 5px;
+            font-weight: bold;
+        }
+        #levelText {
+            color: #ffd32c;
+            font-size: 24px;
+        }
+        #highScoreText {
+            color: #2ed573;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>無限進化槍避けゲーム</h1>
+    
+    <div class="info-panel">
+        ステージ段階: <span id="levelText">LV 1 (初期設定)</span> | 
+        スコア: <span id="score">0</span> 秒 |
+        最高記録: <span id="highScoreText">0</span> 秒
+    </div>
+    <button id="restartBtn" onclick="resetGame()">リトライ</button>
+
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="450" height="450"></canvas>
+    </div>
+
+    <div class="instructions">
+        <p><strong>【操作方法】</strong>矢印キー（← ↑ → ↓）で緑のプレイヤーを動かします。</p>
+        <p><strong>【進化のルール】</strong><strong>30秒生き残るごと</strong>に世界が進化します。画面が広くなり、槍の速度が上がり、それに対抗するように<strong>青いブロックも増殖</strong>します！</p>
+    </div>
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreElement = document.getElementById("score");
+        const levelText = document.getElementById("levelText");
+        const highScoreElement = document.getElementById("highScoreText");
+        const restartBtn = document.getElementById("restartBtn");
+
+        let player, walls, spears, warningDirection, warningTimer;
+        let score = 0;
+        let highScore = 0; 
+        let currentLevel = 1;
+        let gameOver = false;
+        let gameTime = 0;
+        let keys = {};
+        
+        let baseSpeed = 1.6; 
+        
+        let upcomingWalls = [];
+        let showUpcomingWarning = false;
+
+        if (localStorage.getItem("spearGameHighScore")) {
+            highScore = parseInt(localStorage.getItem("spearGameHighScore"));
+            highScoreElement.innerText = highScore;
+        }
+
+        window.addEventListener("keydown", (e) => keys[e.key] = true);
+        window.addEventListener("keyup", (e) => keys[e.key] = false);
+
+        function generateWalls(count, stageWidth, stageHeight, targetLevel) {
+            let newWalls = [];
+            let wSize = 40; 
+            
+            let spread = Math.max(0.20, 0.32 - (targetLevel - 1) * 0.04);
+            let innerSpread = 1 - spread; 
+
+            const layoutTemplates = [
+                {x: spread, y: spread}, {x: innerSpread, y: spread}, {x: spread, y: innerSpread}, {x: innerSpread, y: innerSpread}, 
+                {x: 0.5, y: spread},  
+                {x: 0.5, y: innerSpread},  
+                {x: spread, y: 0.5},  
+                {x: innerSpread, y: 0.5},  
+                {x: 0.5, y: 0.5},   
+                {x: 0.5, y: spread + 0.1},   
+                {x: 0.5, y: innerSpread - 0.1},   
+                {x: spread + 0.1, y: 0.5}    
+            ];
+
+            for (let i = 0; i < Math.min(count, layoutTemplates.length); i++) {
+                let template = layoutTemplates[i];
+                let targetX = Math.floor(stageWidth * template.x - wSize / 2);
+                let targetY = Math.floor(stageHeight * template.y - wSize / 2);
+                newWalls.push({ x: targetX, y: targetY, width: wSize, height: wSize });
+            }
+            return newWalls;
+        }
+
+        function evolveStage() {
+            currentLevel++;
+            levelText.innerText = `LV ${currentLevel} (世界拡張＆加速！状態)`;
+            showUpcomingWarning = false; 
+            
+            let newSize = Math.min(750, 450 + (currentLevel - 1) * 50);
+            canvas.width = newSize;
+            canvas.height = newSize;
+            
+            walls = generateWalls(4 + (currentLevel - 1) * 2, canvas.width, canvas.height, currentLevel);
+            baseSpeed += 1.5;
+
+            while (checkPlayerWallCollision(player.x, player.y)) {
+                player.y += 1; 
+                if(player.y > canvas.height - player.size) {
+                    player.y = canvas.height / 2;
+                    player.x = canvas.width / 2;
+                }
+            }
+
+            canvas.style.borderColor = "#fff";
+            setTimeout(() => { canvas.style.borderColor = "#ff4757"; }, 300);
+        }
+
+        function prepareUpcomingWalls() {
+            let nextLevel = currentLevel + 1;
+            upcomingWalls = generateWalls(4 + (nextLevel - 1) * 2, canvas.width, canvas.height, nextLevel);
+            showUpcomingWarning = true;
+        }
+
+        function resetGame() {
+            canvas.width = 450;
+            canvas.height = 450;
+            
+            player = { x: 215, y: 215, size: 18, hitSize: 12, speed: 5.5 };
+            
+            currentLevel = 1;
+            baseSpeed = 1.6; 
+
+            walls = generateWalls(4, canvas.width, canvas.height, 1);
+            spears = [];
+            upcomingWalls = [];
+            showUpcomingWarning = false;
+            warningDirection = -1;
+            warningTimer = 0;
+            score = 0;
+            gameTime = 0;
+            gameOver = false;
+            restartBtn.style.display = "none";
+            scoreElement.innerText = score;
+            levelText.innerText = `LV 1 (初期設定)`;
+            highScoreElement.innerText = highScore; 
+            triggerNextAttack();
+        }
+
+        function triggerNextAttack() {
+            if (gameOver) return;
+            warningDirection = Math.floor(Math.random() * 4);
+            warningTimer = Math.max(25, 55 - (currentLevel * 4)); 
+        }
+
+        function spawnWallOfSpears(dir) {
+            const speed = baseSpeed + (score * 0.04);
+            const spearThickness = 2; 
+            
+            if (dir === 0 || dir === 2) {
+                for (let x = 0; x < canvas.width; x += spearThickness) {
+                    if (dir === 0) {
+                        spears.push({ x: x, y: 0, width: spearThickness, height: 35, vx: 0, vy: speed, dir: dir });
+                    } else {
+                        spears.push({ x: x, y: canvas.height - 35, width: spearThickness, height: 35, vx: 0, vy: -speed, dir: dir });
+                    }
+                }
+            } else if (dir === 1 || dir === 3) {
+                for (let y = 0; y < canvas.height; y += spearThickness) {
+                    if (dir === 1) {
+                        spears.push({ x: canvas.width - 35, y: y, width: 35, height: spearThickness, vx: -speed, vy: 0, dir: dir });
+                    } else {
+                        spears.push({ x: 0, y: y, width: 35, height: spearThickness, vx: speed, vy: 0, dir: dir });
+                    }
+                }
+            }
+        }
+
+        function checkCollision(rect1, rect2) {
+            return rect1.x < rect2.x + rect2.width &&
+                   rect1.x + rect1.width > rect2.x &&
+                   rect1.y < rect2.y + rect2.height &&
+                   rect1.y + rect1.height > rect2.y;
+        }
+
+        function checkPlayerWallCollision(pX, pY) {
+            let pRect = { x: pX, y: pY, width: player.size, height: player.size };
+            for (let i = 0; i < walls.length; i++) {
+                if (checkCollision(pRect, walls[i])) return true;
+            }
+            return false;
+        }
+    </script>
+    <script>
+        function update() {
+            if (gameOver) return;
+            gameTime++;
+            if (gameTime % 60 === 0) {
+                score++;
+                scoreElement.innerText = score;
+                
+                if ((score + 5) % 30 === 0 && score > 0) {
+                    prepareUpcomingWalls();
+                }
+
+                if (score > 0 && score % 30 === 0) {
+                    evolveStage();
+                }
+            }
+
+            let currentSpeed = player.speed + (currentLevel * 0.2);
+            let nextX = player.x;
+            let nextY = player.y;
+
+            if (keys["ArrowUp"] || keys["Up"]) nextY -= currentSpeed;
+            if (keys["ArrowDown"] || keys["Down"]) nextY += currentSpeed;
+            if (keys["ArrowLeft"] || keys["Left"]) nextX -= currentSpeed;
+            if (keys["ArrowRight"] || keys["Right"]) nextX += currentSpeed;
+
+            if (nextX < 0) nextX = 0;
+            if (nextX > canvas.width - player.size) nextX = canvas.width - player.size;
+            if (nextY < 0) nextY = 0;
+            if (nextY > canvas.height - player.size) nextY = canvas.height - player.size;
+
+            if (!checkPlayerWallCollision(nextX, player.y)) player.x = nextX;
+            if (!checkPlayerWallCollision(player.x, nextY)) player.y = nextY;
+
+            if (warningDirection !== -1) {
+                warningTimer--;
+                if (warningTimer <= 0) {
+                    spawnWallOfSpears(warningDirection);
+                    warningDirection = -1;
+                    
+                    // 【修正】次の波が来るまでのインターバル（大休憩）を「200〜300フレーム（約3.5〜5秒）」に大幅に長くして、次々と来すぎないようにしました！
+                    let nextDelay = Math.max(200, 300 - (currentLevel * 10));
+                    setTimeout(triggerNextAttack, nextDelay * 16);
+                }
+            }
+
+            for (let i = spears.length - 1; i >= 0; i--) {
+                let s = spears[i];
+                s.x += s.vx;
+                s.y += s.vy;
+
+                if (s.x < -150 || s.x > canvas.width + 150 || s.y < -150 || s.y > canvas.height + 150) {
+                    spears.splice(i, 1);
+                    continue;
+                }
+
+                let spearRect = { x: s.x, y: s.y, width: s.width, height: s.height };
+
+                let hitWall = false;
+                for (let j = 0; j < walls.length; j++) {
+                    if (checkCollision(spearRect, walls[j])) {
+                        hitWall = true;
+                        break;
+                    }
+                }
+
+                if (hitWall) {
+                    spears.splice(i, 1); 
+                    continue;
+                }
+
+                let offset = (player.size - player.hitSize) / 2;
+                let pRect = { 
+                    x: player.x + offset, 
+                    y: player.y + offset, 
+                    width: player.hitSize, 
+                    height: player.hitSize 
+                };
+                
+                if (checkCollision(pRect, s)) {
+                    gameOver = true;
+                    
+                    if (score > highScore) {
+                        highScore = score;
+                        localStorage.setItem("spearGameHighScore", highScore.toString());
+                        highScoreElement.innerText = highScore; 
+                    }
+                    
+                    restartBtn.style.display = "block";
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = "#1e90ff";
+            walls.forEach(w => ctx.fillRect(w.x, w.y, w.width, w.height));
+
+            if (showUpcomingWarning) {
+                ctx.strokeStyle = "#ff4757";
+                ctx.lineWidth = 2;
+                
+                ctx.save();
+                ctx.setLineDash([4, 4]); // 点線を確実に反映
+                upcomingWalls.forEach(uw => {
+                    ctx.strokeRect(uw.x, uw.y, uw.width, uw.height);
+                });
+                ctx.restore();
+                
+                ctx.fillStyle = "#ff4757";
+                ctx.font = "bold 16px sans-serif";
+                ctx.fillText("⚠️ まもなくここにブロックが出現！", canvas.width / 2 - 120, 25);
+            }
+
+            if (warningDirection !== -1 && Math.floor(gameTime / 3) % 2 === 0) {
+                ctx.fillStyle = "rgba(255, 242, 0, 0.5)";
+                if (warningDirection === 0) ctx.fillRect(0, 0, canvas.width, 30);
+                if (warningDirection === 1) ctx.fillRect(canvas.width - 30, 0, 30, canvas.height);
+                if (warningDirection === 2) ctx.fillRect(0, canvas.height - 30, canvas.width, 30);
+                if (warningDirection === 3) ctx.fillRect(0, 0, 30, canvas.height);
+            }
+
+            ctx.fillStyle = "rgba(255, 71, 87, 0.95)";
+            spears.forEach(s => {
+                ctx.fillRect(s.x, s.y, s.width, s.height);
+            });
+
+            if (!gameOver) {
+                ctx.fillStyle = "#2ed573";
+                ctx.fillRect(player.x, player.y, player.size, player.size);
+            }
+
+            if (gameOver) {
+                ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#ff4757";
+                ctx.font = "bold 32px sans-serif";
+                ctx.fillText("限界到達（ゲームオーバー）", canvas.width / 2 - 190, canvas.height / 2 - 10);
+                ctx.fillStyle = "#fff";
+                ctx.font = "20px sans-serif";
+                ctx.fillText(`最終記録: ${score} 秒 (最高記録: ${highScore} 秒)`, canvas.width / 2 - 130, canvas.height / 2 + 30);
+            }
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        resetGame();
+        gameLoop();
+    </script>
+</body>
+</html>
